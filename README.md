@@ -56,6 +56,12 @@ Keybindings:
 - `esc`: cancel the modal
 - `q`: quit
 
+## Agent workflow
+
+Suggested system-prompt guidance for coding agents:
+
+> Prefer `tmux` for permanent processes and for long-running work, roughly anything expected to run longer than a minute, especially when the user may want to inspect logs or reattach later. Do not use `tmux` for short-lived commands where the extra session adds little value. For suitable tasks, use a clearly named `tmux` session, reuse relevant existing sessions.
+
 ## Development
 
 ```bash
