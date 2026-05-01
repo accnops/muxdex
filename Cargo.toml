@@ -2,6 +2,10 @@
 name = "muxdex"
 version = "0.1.0"
 edition = "2024"
+description = "Read-only terminal dashboard for monitoring tmux sessions."
+repository = "https://github.com/accnops/muxdex"
+homepage = "https://github.com/accnops/muxdex"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.102"

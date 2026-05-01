@@ -13,6 +13,10 @@ pub fn render_empty_state_text(_: &App) -> String {
     "No tmux sessions detected. Tiles appear automatically when sessions start.".to_string()
 }
 
+fn footer_text() -> &'static str {
+    "tab/shift-tab move  x close  q quit"
+}
+
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let [content_area, footer_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
@@ -55,10 +59,6 @@ fn render_tile(
     record: &SessionRecord,
     focused_name: Option<&str>,
 ) {
-    let status = match record.status {
-        SessionStatus::Live => "live",
-        SessionStatus::Dead => "dead",
-    };
     let is_focused = focused_name == Some(record.name.as_str());
     let border_style = match record.status {
         SessionStatus::Live => Style::default().fg(record.accent),
@@ -66,24 +66,10 @@ fn render_tile(
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
     };
-    let title = Line::from(vec![
-        Span::styled(
-            record.name.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        Span::styled(format!("[{status}]"), Style::default().fg(Color::Gray)),
-        Span::raw(" "),
-        Span::styled("X", Style::default().fg(Color::Red)),
-    ]);
     let block = Block::bordered()
-        .border_set(if is_focused {
-            border::THICK
-        } else {
-            border::ROUNDED
-        })
+        .border_set(tile_border_set(is_focused))
         .border_style(border_style)
-        .title_top(title);
+        .title_top(tile_title(record, is_focused));
     let content = if let Some(reason) = &record.stale_reason {
         let mut text = record.snapshot.text().clone();
         text.lines.push(Line::from(vec![Span::styled(
@@ -105,6 +91,32 @@ fn render_tile(
     frame.render_widget(paragraph, area);
 }
 
+fn tile_border_set(is_focused: bool) -> border::Set<'static> {
+    if is_focused {
+        border::DOUBLE
+    } else {
+        border::ROUNDED
+    }
+}
+
+fn tile_title(record: &SessionRecord, is_focused: bool) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        record.name.clone(),
+        if is_focused {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        },
+    )];
+
+    if record.status == SessionStatus::Dead {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled("[killed]", Style::default().fg(Color::Gray)));
+    }
+
+    Line::from(spans)
+}
+
 fn render_centered_message(frame: &mut Frame<'_>, area: Rect, title: &str, message: &str) {
     let [vertical] = Layout::vertical([Constraint::Length(5)])
         .flex(Flex::Center)
@@ -123,17 +135,7 @@ fn render_centered_message(frame: &mut Frame<'_>, area: Rect, title: &str, messa
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let mut parts = vec![
-        Span::raw("tab/shift-tab move"),
-        Span::raw("  "),
-        Span::raw("x close"),
-        Span::raw("  "),
-        Span::raw("enter confirm"),
-        Span::raw("  "),
-        Span::raw("esc cancel"),
-        Span::raw("  "),
-        Span::raw("q quit"),
-    ];
+    let mut parts = vec![Span::raw(footer_text())];
 
     if let Some(error) = app.global_error() {
         parts.extend([
@@ -165,16 +167,117 @@ fn render_confirm_overlay(frame: &mut Frame<'_>, session: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::App;
+    use std::time::SystemTime;
 
-    use super::render_empty_state_text;
+    use ratatui::{
+        style::{Color, Modifier},
+        symbols::border,
+    };
+
+    use crate::{
+        app::App,
+        store::{SessionRecord, SessionStatus},
+        tmux::PaneSnapshot,
+    };
+
+    use super::{footer_text, render_empty_state_text, tile_border_set, tile_title};
 
     #[test]
     fn empty_state_explains_that_sessions_appear_automatically() {
         let app = App::new();
         let text = render_empty_state_text(&app);
-
         assert!(text.contains("No tmux sessions detected"));
         assert!(text.contains("appear automatically"));
+    }
+
+    #[test]
+    fn focused_tile_uses_double_border_set() {
+        assert_eq!(tile_border_set(true), border::DOUBLE);
+        assert_eq!(tile_border_set(false), border::ROUNDED);
+    }
+
+    #[test]
+    fn tile_title_does_not_include_close_glyph() {
+        let title = tile_title(&sample_record(), true);
+        let rendered = title
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("alpha"));
+        assert!(!rendered.contains('X'));
+    }
+
+    #[test]
+    fn live_tile_title_omits_status_label() {
+        let title = tile_title(&sample_record(), true);
+        let rendered = title
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("alpha"));
+        assert!(!rendered.contains("[live]"));
+    }
+
+    #[test]
+    fn dead_tile_title_uses_killed_label() {
+        let title = tile_title(&dead_record(), false);
+        let rendered = title
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("alpha"));
+        assert!(rendered.contains("[killed]"));
+        assert!(!rendered.contains("[dead]"));
+    }
+
+    #[test]
+    fn unfocused_tile_title_is_not_bold() {
+        let title = tile_title(&sample_record(), false);
+
+        assert!(!title.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn focused_tile_title_stays_bold() {
+        let title = tile_title(&sample_record(), true);
+
+        assert!(title.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn footer_omits_confirm_and_cancel_hints() {
+        let footer = footer_text();
+
+        assert!(footer.contains("tab/shift-tab move"));
+        assert!(footer.contains("x close"));
+        assert!(footer.contains("q quit"));
+        assert!(!footer.contains("enter confirm"));
+        assert!(!footer.contains("esc cancel"));
+    }
+
+    fn sample_record() -> SessionRecord {
+        SessionRecord {
+            name: "alpha".to_string(),
+            active_pane_id: "%1".to_string(),
+            status: SessionStatus::Live,
+            last_seen: SystemTime::UNIX_EPOCH,
+            snapshot: PaneSnapshot::placeholder("hello", 10, 3),
+            hidden: false,
+            accent: Color::Cyan,
+            stale_reason: None,
+        }
+    }
+
+    fn dead_record() -> SessionRecord {
+        SessionRecord {
+            status: SessionStatus::Dead,
+            ..sample_record()
+        }
     }
 }

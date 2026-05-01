@@ -47,6 +47,10 @@ impl ProbeError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn is_no_server_running(&self) -> bool {
+        self.message.contains("no server running")
+    }
 }
 
 pub trait CommandRunner {
@@ -74,9 +78,14 @@ impl TmuxProbe<ProcessRunner> {
 
 impl<R: CommandRunner> TmuxProbe<R> {
     pub fn poll_sessions(&self) -> Result<Vec<ObservedSession>, ProbeError> {
-        let rows = self
+        let rows = match self
             .runner
-            .run(&["list-panes", "-a", "-F", LIST_PANES_FORMAT])?;
+            .run(&["list-panes", "-a", "-F", LIST_PANES_FORMAT])
+        {
+            Ok(rows) => rows,
+            Err(error) if error.is_no_server_running() => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
 
         if rows.contains("no server running") {
             return Ok(Vec::new());
@@ -337,6 +346,18 @@ mod tests {
         let probe = TmuxProbe::new(FakeRunner::new([(
             format!("list-panes\0-a\0-F\0{LIST_PANES_FORMAT}"),
             Ok("no server running on /tmp/tmux-501/default\n".to_string()),
+        )]));
+
+        let observed = probe.poll_sessions().unwrap();
+
+        assert!(observed.is_empty());
+    }
+
+    #[test]
+    fn poll_sessions_returns_empty_when_no_tmux_server_is_reported_as_error() {
+        let probe = TmuxProbe::new(FakeRunner::new([(
+            format!("list-panes\0-a\0-F\0{LIST_PANES_FORMAT}"),
+            Err("no server running on /private/tmp/tmux-501/default".to_string()),
         )]));
 
         let observed = probe.poll_sessions().unwrap();
